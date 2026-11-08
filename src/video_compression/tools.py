@@ -83,6 +83,73 @@ def probe_video(path: str) -> dict:
     }
 
 
+# --- deciding whether re-encoding is worth it ------------------------------------
+
+TARGET_SHORT_SIDE = 720
+EFFICIENT_CODECS = {"hevc", "av1", "vp9"}
+# Bits per pixel per frame at or below which a source is already "lean": re-encoding
+# it without downscaling saves little and constant-quality modes may even grow it.
+SKIP_BPP_EFFICIENT = 0.10  # HEVC / AV1 / VP9
+SKIP_BPP_OTHER = 0.07  # H.264, MPEG-4, ...
+# Encoded video bitrate is capped at this fraction of the source video bitrate.
+MAXRATE_RATIO = 0.70
+
+
+@dataclass
+class SourceAssessment:
+    codec: str | None
+    width: int | None
+    height: int | None
+    video_kbps: int | None
+    bpp: float | None
+    needs_downscale: bool
+    max_video_kbps: int | None  # cap to force on the encode; None if unknown
+    skip_reason: str | None  # set when the file should not be re-encoded
+
+
+def _parse_fps(rate: str | None) -> float | None:
+    try:
+        num, den = (rate or "").split("/")
+        return float(num) / float(den) if float(den) else None
+    except ValueError:
+        return None
+
+
+def assess_source(probe: dict) -> SourceAssessment:
+    """Decide deterministically (no LLM) whether a file is worth re-encoding."""
+    streams = probe.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if video is None:
+        return SourceAssessment(None, None, None, None, None, False, None, "no video stream")
+
+    codec = video.get("codec_name")
+    w, h = video.get("width"), video.get("height")
+    fps = _parse_fps(video.get("avg_frame_rate"))
+
+    # Prefer the stream's own bitrate; otherwise container bitrate minus audio.
+    bps = int(video["bit_rate"]) if video.get("bit_rate") else None
+    if bps is None and probe.get("format", {}).get("bit_rate"):
+        audio = sum(int(s.get("bit_rate", 0)) for s in streams if s.get("codec_type") == "audio")
+        bps = int(probe["format"]["bit_rate"]) - audio
+    video_kbps = bps // 1000 if bps else None
+
+    bpp = bps / (w * h * fps) if bps and w and h and fps else None
+    needs_downscale = bool(w and h and min(w, h) > TARGET_SHORT_SIDE)
+    max_video_kbps = int(video_kbps * MAXRATE_RATIO) if video_kbps else None
+
+    skip_reason = None
+    if not needs_downscale and bpp is not None:
+        limit = SKIP_BPP_EFFICIENT if codec in EFFICIENT_CODECS else SKIP_BPP_OTHER
+        if bpp <= limit:
+            skip_reason = (
+                f"{codec} {w}x{h} at {video_kbps} kb/s ({bpp:.3f} bits/pixel/frame, "
+                f"limit {limit}) is already lean and needs no downscaling; "
+                "re-encoding would save little or grow the file."
+            )
+
+    return SourceAssessment(codec, w, h, video_kbps, bpp, needs_downscale, max_video_kbps, skip_reason)
+
+
 def available_encoders(wanted: list[str]) -> list[str]:
     """Filter `wanted` to the encoders this ffmpeg build actually has."""
     result = run_command(["ffmpeg", "-hide_banner", "-encoders"], timeout=30)
@@ -97,16 +164,41 @@ _SHELL_CHARS = set("|;&<>`$\n")
 _FORBIDDEN_ARGS = {"-y", "-n"}
 
 
+def _strip_option(args: list[str], *names: str) -> list[str]:
+    """Remove options (and their value) such as '-maxrate 2M' or '-maxrate:v 2M'."""
+    out, skip_next = [], False
+    for a in args:
+        if skip_next:
+            skip_next = False
+        elif a.split(":")[0] in names:
+            skip_next = True
+        else:
+            out.append(a)
+    return out
+
+
 def build_ffmpeg_command(
-    args: list[str], output_extension: str, input_path: str, output_dir: str
+    args: list[str],
+    output_extension: str,
+    input_path: str,
+    output_dir: str,
+    max_video_kbps: int | None = None,
 ) -> list[str]:
     """Validate LLM-produced args and substitute real paths.
+
+    If max_video_kbps is given, any model-provided -maxrate/-bufsize is replaced
+    with that cap so the output video can't exceed it.
 
     Raises ValueError with a message the LLM can act on if anything is off.
     """
     args = list(args)
     if args and args[0].lower() in ("ffmpeg", "ffmpeg.exe"):
         args = args[1:]
+    if max_video_kbps:
+        args = _strip_option(args, "-maxrate", "-bufsize")
+        if "{output}" in args:
+            i = args.index("{output}")
+            args[i:i] = ["-maxrate", f"{max_video_kbps}k", "-bufsize", f"{max_video_kbps * 2}k"]
 
     if args.count("{input}") != 1 or args.count("{output}") != 1:
         raise ValueError("args must contain '{input}' and '{output}' exactly once each, as separate items.")

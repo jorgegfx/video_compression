@@ -34,9 +34,11 @@ Other rules:
 - Copy the audio stream (-c:a copy) if it is already AAC/Opus at <= 160 kb/s; \
 otherwise re-encode to AAC at 160k.
 - Keep metadata and subtitle streams only if they fit the output container.
-- Set skip=true (args empty) ONLY if the video is already HEVC/AV1, at 720p or \
-smaller, and at a modest bitrate for its resolution. Never skip a video that \
-needs downscaling.
+- The output MUST be smaller than the source. The program appends -maxrate and \
+-bufsize itself (capped below the source video bitrate), so do not include them.
+- Set skip=true (args empty) if re-encoding is unlikely to make the file \
+meaningfully smaller at similar quality. Never skip a video that needs \
+downscaling.
 - Use the literal placeholders {{input}} and {{output}} for paths, each exactly \
 once, with {{input}} directly after -i. Do not include 'ffmpeg', '-y', '-n', \
 shell syntax, pipes or redirects.
@@ -56,8 +58,13 @@ H.264 source:
 """
 
 
-def build_messages(probe: dict, encoders: list[str]) -> list[tuple[str, str]]:
+def build_messages(
+    probe: dict, encoders: list[str], max_video_kbps: int | None = None
+) -> list[tuple[str, str]]:
+    human = "ffprobe metadata:\n" + json.dumps(probe, indent=2)
+    if max_video_kbps:
+        human += f"\n\nThe output video bitrate will be capped at {max_video_kbps} kb/s."
     return [
         ("system", SYSTEM_PROMPT.format(encoders=", ".join(encoders))),
-        ("human", "ffprobe metadata:\n" + json.dumps(probe, indent=2)),
+        ("human", human),
     ]

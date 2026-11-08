@@ -7,7 +7,7 @@ from video_compression.llm import get_planner
 from video_compression.prompts import build_messages
 from video_compression.script import write_ps1
 from video_compression.state import FileResult, OverallState, VideoState
-from video_compression.tools import build_ffmpeg_command, probe_video
+from video_compression.tools import assess_source, build_ffmpeg_command, probe_video
 
 MAX_LLM_ATTEMPTS = 2
 
@@ -50,8 +50,15 @@ def probe_and_plan(state: VideoState) -> dict:
         return {"results": [result]}
     result["probe"] = probe
 
+    # Decide in code, not in the LLM, whether re-encoding can actually help.
+    source = assess_source(probe)
+    if source.skip_reason:
+        result["skipped"] = True
+        result["reasoning"] = source.skip_reason
+        return {"results": [result]}
+
     planner = get_planner()
-    messages = build_messages(probe, state["encoders"])
+    messages = build_messages(probe, state["encoders"], source.max_video_kbps)
     for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
         print(f"Planning {file} (attempt {attempt})")
         try:
@@ -62,7 +69,11 @@ def probe_and_plan(state: VideoState) -> dict:
                 result.pop("error", None)
                 break
             result["command"] = build_ffmpeg_command(
-                plan.args, plan.output_extension, file, state["output_dir"]
+                plan.args,
+                plan.output_extension,
+                file,
+                state["output_dir"],
+                max_video_kbps=source.max_video_kbps,
             )
             result.pop("error", None)
             break
