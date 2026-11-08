@@ -1,0 +1,23 @@
+[project]
+name = "video-compression"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jorge Gonzalez", email = "jorgegfx@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=1.4.9",
+    "langchain-anthropic>=1.7.10",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.20",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+video-compression = "video_compression.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
