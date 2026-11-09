@@ -15,11 +15,14 @@ class FileResult(TypedDict):
     reasoning: NotRequired[str]
     skipped: NotRequired[bool]
     command: NotRequired[list[str]]  # final ffmpeg args, ready for run_command
+    staged_input: NotRequired[str]  # copy `file` here before running `command`
     error: NotRequired[str]
 
 
 class OverallState(TypedDict):
-    input_dir: str
+    input_dir: str  # where the source videos are read (and probed) from
+    # Set only with --input: sources are copied here by the script, then encoded.
+    staging_dir: str | None
     output_dir: str
     encoders: list[str]  # video encoders the LLM may choose from
     mode: Mode  # which prompt/rules to use
@@ -33,6 +36,7 @@ class VideoState(TypedDict):
     """Input sent to each parallel probe_and_plan worker via Send."""
 
     file: str
+    staging_dir: str | None
     output_dir: str
     encoders: list[str]
     mode: Mode

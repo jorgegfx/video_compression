@@ -87,11 +87,13 @@ VIDEO_MODE=compress                       # optional: compress | enhance
 
 ## Usage
 
-1. Put videos in `input/`.
+1. Put videos in `input/`, or point `--input` at another folder.
 2. Generate the script. Run this from the project root, because paths are resolved from the current directory:
    ```powershell
    uv run video-compression
+   uv run video-compression --input D:\Videos\raw   # optional: another source folder
    ```
+   With `--input`, the generated script first **copies** each file into `input/` and then runs ffmpeg on that copy. A copy that already exists in `input/` is reused, never overwritten. If a copy fails, the script stops before ffmpeg runs. Without `--input`, there is no copy step.
    The console shows a summary per file (source codec, resolution, bitrate and size, the LLM's reasoning, and the command).
 3. Review `scripts/encode.ps1`, then run it:
    ```powershell
@@ -109,6 +111,13 @@ New-Item -ItemType Directory -Force -Path C:\...\video-compression\output | Out-
 ffmpeg -hide_banner -n -hwaccel cuda -hwaccel_output_format cuda -i 'C:\...\input\clip.mp4' -vf scale_cuda=-2:720 -c:v hevc_nvenc -preset p7 -tune hq -rc vbr -cq 23 -b:v 0 -spatial-aq 1 -temporal-aq 1 -c:a copy 'C:\...\output\clip.mp4'
 ```
 
+With `--input D:\Videos\raw`, each file gets a copy step before its ffmpeg command, which reads the copy in `input/`:
+
+```powershell
+if (-not (Test-Path -LiteralPath 'C:\...\input\clip.mp4')) { Copy-Item -LiteralPath 'D:\Videos\raw\clip.mp4' -Destination 'C:\...\input\clip.mp4' -ErrorAction Stop }
+ffmpeg -hide_banner -n ... -i 'C:\...\input\clip.mp4' ... 'C:\...\output\clip.mp4'
+```
+
 ## Configuration
 
 | Setting | Where | Default |
@@ -117,7 +126,8 @@ ffmpeg -hide_banner -n -hwaccel cuda -hwaccel_output_format cuda -i 'C:\...\inpu
 | Model | `OLLAMA_MODEL` in `.env` | `gpt-oss:120b` |
 | Mode | `--mode` flag or `VIDEO_MODE` in `.env` | `compress` |
 | Allowed encoders | `FFMPEG_ENCODERS` in `.env` (only those in your ffmpeg build are kept) | `libx265,hevc_nvenc` |
-| Input / output / script paths | `main.py` | `input/`, `output/`, `scripts/encode.ps1` |
+| Input folder | `--input` flag (files are copied into `input/` by the script) | `input/` (no copy) |
+| Output / script paths | `main.py` | `output/`, `scripts/encode.ps1` |
 | Parallel LLM calls | `max_concurrency` in `main.py` | `2` |
 | Encoding rules (resolution, quality, audio, skip) | `SYSTEM_PROMPT` / `ENHANCE_SYSTEM_PROMPT` in `prompts.py` | see above |
 | Enhance bitrate cap | `ENHANCE_UPSCALE_RATIO`, `MAXRATE_RATIO_ENHANCE`, `ENHANCE_MAX_KBPS` in `tools.py` | `1.8`, `0.90`, `4000` |

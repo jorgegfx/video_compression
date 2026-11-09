@@ -11,12 +11,22 @@ from video_compression.tools import available_encoders
 
 DEFAULT_ENCODERS = "libx265,hevc_nvenc"
 MODES = ("compress", "enhance")
+DEFAULT_INPUT_DIR = "input"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="video-compression",
-        description="Generate ffmpeg commands for the videos in input/.",
+        description="Generate ffmpeg commands for a folder of videos.",
+    )
+    parser.add_argument(
+        "--input",
+        default=None,
+        metavar="DIR",
+        help=(
+            f"Folder with the source videos (default: {DEFAULT_INPUT_DIR}). When given, "
+            f"the script first copies each file into {DEFAULT_INPUT_DIR}/ and encodes that copy."
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -41,6 +51,13 @@ def main():
     if mode not in MODES:
         raise SystemExit(f"VIDEO_MODE must be one of {MODES}, got {mode!r}.")
 
+    default_input = os.path.abspath(DEFAULT_INPUT_DIR)
+    input_dir = os.path.abspath(args.input) if args.input else default_input
+    if not os.path.isdir(input_dir):
+        raise SystemExit(f"Input folder not found: {input_dir}")
+    # Only with --input (pointing elsewhere): the script copies sources into input/ first.
+    staging_dir = default_input if os.path.normcase(input_dir) != os.path.normcase(default_input) else None
+
     wanted = os.environ.get("FFMPEG_ENCODERS", DEFAULT_ENCODERS).split(",")
     encoders = available_encoders([e.strip() for e in wanted if e.strip()])
     if not encoders:
@@ -48,7 +65,8 @@ def main():
 
     state: OverallState = {
         # Absolute paths so the generated script works from any directory.
-        "input_dir": os.path.abspath("input"),
+        "input_dir": input_dir,
+        "staging_dir": staging_dir,
         "output_dir": os.path.abspath("output"),
         "encoders": encoders,
         "mode": mode,

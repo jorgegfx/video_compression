@@ -29,6 +29,7 @@ def fan_out_files(state: OverallState) -> list[Send]:
             "probe_and_plan",
             {
                 "file": os.path.join(state["input_dir"], file),
+                "staging_dir": state.get("staging_dir"),
                 "output_dir": state["output_dir"],
                 "encoders": state["encoders"],
                 "mode": state["mode"],
@@ -58,6 +59,11 @@ def probe_and_plan(state: VideoState) -> dict:
         result["reasoning"] = source.skip_reason
         return {"results": [result]}
 
+    # With --input, the script copies the source into staging_dir and encodes the copy.
+    encode_input = file
+    if state.get("staging_dir"):
+        encode_input = os.path.join(state["staging_dir"], os.path.basename(file))
+
     planner = get_planner()
     messages = build_messages(probe, state["encoders"], source.max_video_kbps, state["mode"])
     for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
@@ -72,10 +78,12 @@ def probe_and_plan(state: VideoState) -> dict:
             result["command"] = build_ffmpeg_command(
                 plan.args,
                 plan.output_extension,
-                file,
+                encode_input,
                 state["output_dir"],
                 max_video_kbps=source.max_video_kbps,
             )
+            if encode_input != file:
+                result["staged_input"] = encode_input
             result.pop("error", None)
             break
         except Exception as e:
@@ -91,7 +99,9 @@ def probe_and_plan(state: VideoState) -> dict:
 
 def write_script(state: OverallState) -> dict:
     """Fan-in: runs once after every probe_and_plan worker has finished."""
-    write_ps1(state["results"], state["output_dir"], state["script_path"])
+    write_ps1(
+        state["results"], state["output_dir"], state["script_path"], state.get("staging_dir")
+    )
     return {}
 
 
