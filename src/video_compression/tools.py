@@ -93,11 +93,13 @@ SKIP_BPP_EFFICIENT = 0.10  # HEVC / AV1 / VP9
 SKIP_BPP_OTHER = 0.07  # H.264, MPEG-4, ...
 # Encoded video bitrate is capped at this fraction of the source video bitrate.
 MAXRATE_RATIO = 0.70
-# Enhance mode: a looser cap, clamped to a sensible range for 720p 10-bit HEVC so
-# lean (or upscaled) sources aren't starved and huge sources don't stay bloated.
-MAXRATE_RATIO_ENHANCE = 0.90
-ENHANCE_MIN_KBPS = 1500
-ENHANCE_MAX_KBPS = 4000
+# Enhance mode caps, as a fraction of the source video bitrate. Upscaling adds
+# pixels but no real detail, so a modest budget looks nearly the same as an
+# uncapped encode: measured on a 360x202 H.264 source, 1.8x gave a 1.6x file at
+# SSIM 0.995 vs 0.997 for a 4x file. Keep it below 2 so files never double.
+ENHANCE_UPSCALE_RATIO = 1.8
+MAXRATE_RATIO_ENHANCE = 0.90  # downscaling / already 720p: never grow
+ENHANCE_MAX_KBPS = 4000  # ceiling for 720p 10-bit HEVC, also used if bitrate is unknown
 
 
 @dataclass
@@ -124,7 +126,8 @@ def assess_source(probe: dict, mode: str = "compress") -> SourceAssessment:
     """Decide deterministically (no LLM) whether a file is worth re-encoding.
 
     In "enhance" mode every video is re-encoded (it is always scaled to 720p) and
-    the bitrate cap is looser, clamped to ENHANCE_MIN_KBPS..ENHANCE_MAX_KBPS.
+    the bitrate cap is relative to the source: ENHANCE_UPSCALE_RATIO when
+    upscaling, MAXRATE_RATIO_ENHANCE otherwise, at most ENHANCE_MAX_KBPS.
     """
     streams = probe.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
@@ -146,8 +149,10 @@ def assess_source(probe: dict, mode: str = "compress") -> SourceAssessment:
     needs_downscale = bool(w and h and min(w, h) > TARGET_SHORT_SIDE)
     if mode == "enhance":
         needs_downscale = bool(w and h and min(w, h) != TARGET_SHORT_SIDE)  # up or down
-        cap = int(video_kbps * MAXRATE_RATIO_ENHANCE) if video_kbps else ENHANCE_MAX_KBPS
-        max_video_kbps = min(max(cap, ENHANCE_MIN_KBPS), ENHANCE_MAX_KBPS)
+        upscale = bool(w and h and min(w, h) < TARGET_SHORT_SIDE)
+        ratio = ENHANCE_UPSCALE_RATIO if upscale else MAXRATE_RATIO_ENHANCE
+        cap = int(video_kbps * ratio) if video_kbps else ENHANCE_MAX_KBPS
+        max_video_kbps = min(cap, ENHANCE_MAX_KBPS)
         return SourceAssessment(codec, w, h, video_kbps, bpp, needs_downscale, max_video_kbps, None)
 
     max_video_kbps = int(video_kbps * MAXRATE_RATIO) if video_kbps else None

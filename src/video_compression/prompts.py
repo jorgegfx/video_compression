@@ -89,10 +89,12 @@ frames must come back to system memory.
 "-c:v", "hevc_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr", \
 "-cq", "<value>", "-b:v", "0", "-spatial-aq", "1", "-temporal-aq", "1", \
 "-rc-lookahead", "32", "-bf", "4", "-b_ref_mode", "middle", \
-"-pix_fmt", "p010le", "-profile:v", "main10". Use -cq 20-22 (lower = better \
-quality; use 20 when upscaling). Use these option names exactly as written.
+"-pix_fmt", "p010le", "-profile:v", "main10". Use -cq 21-22 when downscaling \
+or keeping 720p. Use -cq 24 when upscaling: upscaled frames contain no new \
+fine detail, so a lower cq only spends bits on interpolation without visible \
+gain. Use these option names exactly as written.
 - If hevc_nvenc is not allowed, fall back to libx265 with "-preset", "slow", \
-"-crf", "19"-"21", "-pix_fmt", "yuv420p10le", "-profile:v", "main10", and no \
+"-crf", "20"-"21" (23 when upscaling), "-pix_fmt", "yuv420p10le", "-profile:v", "main10", and no \
 -hwaccel options.
 
 Other rules:
@@ -101,8 +103,9 @@ Other rules:
 - Copy the audio stream (-c:a copy) if it is already AAC/Opus at <= 160 kb/s; \
 otherwise re-encode to AAC at 160k.
 - Keep metadata and subtitle streams only if they fit the output container.
-- Keep the size reasonable. The program appends -maxrate and -bufsize itself, \
-so do not include them.
+- The output must stay under twice the source size (and smaller than the \
+source when downscaling). The program enforces this by appending -maxrate and \
+-bufsize itself, so do not include them.
 - Never skip: set skip=false and always return args. Enhancement is the goal.
 - Use the literal placeholders {{input}} and {{output}} for paths, each exactly \
 once, with {{input}} directly after -i. Do not include 'ffmpeg', '-y', '-n', \
