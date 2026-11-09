@@ -4,7 +4,9 @@ from datetime import datetime
 
 from video_compression.state import FileResult
 
-_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_\-.:/\\=+,]+$")
+# No comma: unquoted, PowerShell reads it as the array operator and would split
+# filter chains such as "hqdn3d=...,scale=...".
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_\-.:/\\=+]+$")
 
 
 def ps_quote(arg: str) -> str:

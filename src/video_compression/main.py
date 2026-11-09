@@ -1,3 +1,4 @@
+import argparse
 import os
 import subprocess
 import sys
@@ -9,12 +10,36 @@ from video_compression.state import FileResult, OverallState
 from video_compression.tools import available_encoders
 
 DEFAULT_ENCODERS = "libx265,hevc_nvenc"
+MODES = ("compress", "enhance")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="video-compression",
+        description="Generate ffmpeg commands for the videos in input/.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=MODES,
+        default=None,
+        help=(
+            "compress: smaller files, downscale to 720p (default). "
+            "enhance: best image quality at 720p (up- or downscaled), reasonable size. "
+            "Falls back to VIDEO_MODE in .env."
+        ),
+    )
+    return parser.parse_args(argv)
 
 
 def main():
     # Windows consoles default to cp1252; LLM text often has Unicode punctuation.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    load_dotenv()  # OLLAMA_API_KEY, OLLAMA_MODEL, FFMPEG_ENCODERS
+    args = parse_args()
+    load_dotenv()  # OLLAMA_API_KEY, OLLAMA_MODEL, FFMPEG_ENCODERS, VIDEO_MODE
+
+    mode = args.mode or os.environ.get("VIDEO_MODE", "compress").strip().lower()
+    if mode not in MODES:
+        raise SystemExit(f"VIDEO_MODE must be one of {MODES}, got {mode!r}.")
 
     wanted = os.environ.get("FFMPEG_ENCODERS", DEFAULT_ENCODERS).split(",")
     encoders = available_encoders([e.strip() for e in wanted if e.strip()])
@@ -26,6 +51,7 @@ def main():
         "input_dir": os.path.abspath("input"),
         "output_dir": os.path.abspath("output"),
         "encoders": encoders,
+        "mode": mode,
         "script_path": os.path.abspath(os.path.join("scripts", "encode.ps1")),
         "results": [],
     }
@@ -55,6 +81,7 @@ def print_result(result: OverallState) -> None:
     print(f"\nInput:    {result['input_dir']}")
     print(f"Output:   {result['output_dir']}")
     print(f"Encoders: {', '.join(result['encoders'])}")
+    print(f"Mode:     {result['mode']}")
     print(f"Files:    {len(results)}")
 
     for i, r in enumerate(results, start=1):
@@ -65,7 +92,7 @@ def print_result(result: OverallState) -> None:
         if "reasoning" in r:
             print(f"  Plan:    {r['reasoning']}")
         if r.get("skipped"):
-            print("  Result:  skipped (already efficient)")
+            print("  Result:  skipped")
         elif "command" in r:
             print(f"  Command: {subprocess.list2cmdline(r['command'])}")
         if "error" in r:

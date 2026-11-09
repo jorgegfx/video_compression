@@ -56,7 +56,7 @@ def run_command(
 _FORMAT_KEYS = ("format_name", "duration", "size", "bit_rate")
 _STREAM_KEYS = (
     "codec_type", "codec_name", "profile", "width", "height", "pix_fmt",
-    "avg_frame_rate", "bit_rate", "color_space", "color_transfer",
+    "avg_frame_rate", "field_order", "bit_rate", "color_space", "color_transfer",
     "color_primaries", "channels", "channel_layout", "sample_rate",
 )
 
@@ -93,6 +93,11 @@ SKIP_BPP_EFFICIENT = 0.10  # HEVC / AV1 / VP9
 SKIP_BPP_OTHER = 0.07  # H.264, MPEG-4, ...
 # Encoded video bitrate is capped at this fraction of the source video bitrate.
 MAXRATE_RATIO = 0.70
+# Enhance mode: a looser cap, clamped to a sensible range for 720p 10-bit HEVC so
+# lean (or upscaled) sources aren't starved and huge sources don't stay bloated.
+MAXRATE_RATIO_ENHANCE = 0.90
+ENHANCE_MIN_KBPS = 1500
+ENHANCE_MAX_KBPS = 4000
 
 
 @dataclass
@@ -102,7 +107,7 @@ class SourceAssessment:
     height: int | None
     video_kbps: int | None
     bpp: float | None
-    needs_downscale: bool
+    needs_downscale: bool  # in enhance mode: needs any rescale to 720p
     max_video_kbps: int | None  # cap to force on the encode; None if unknown
     skip_reason: str | None  # set when the file should not be re-encoded
 
@@ -115,8 +120,12 @@ def _parse_fps(rate: str | None) -> float | None:
         return None
 
 
-def assess_source(probe: dict) -> SourceAssessment:
-    """Decide deterministically (no LLM) whether a file is worth re-encoding."""
+def assess_source(probe: dict, mode: str = "compress") -> SourceAssessment:
+    """Decide deterministically (no LLM) whether a file is worth re-encoding.
+
+    In "enhance" mode every video is re-encoded (it is always scaled to 720p) and
+    the bitrate cap is looser, clamped to ENHANCE_MIN_KBPS..ENHANCE_MAX_KBPS.
+    """
     streams = probe.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     if video is None:
@@ -135,6 +144,12 @@ def assess_source(probe: dict) -> SourceAssessment:
 
     bpp = bps / (w * h * fps) if bps and w and h and fps else None
     needs_downscale = bool(w and h and min(w, h) > TARGET_SHORT_SIDE)
+    if mode == "enhance":
+        needs_downscale = bool(w and h and min(w, h) != TARGET_SHORT_SIDE)  # up or down
+        cap = int(video_kbps * MAXRATE_RATIO_ENHANCE) if video_kbps else ENHANCE_MAX_KBPS
+        max_video_kbps = min(max(cap, ENHANCE_MIN_KBPS), ENHANCE_MAX_KBPS)
+        return SourceAssessment(codec, w, h, video_kbps, bpp, needs_downscale, max_video_kbps, None)
+
     max_video_kbps = int(video_kbps * MAXRATE_RATIO) if video_kbps else None
 
     skip_reason = None

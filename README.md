@@ -27,6 +27,32 @@ The LLM is told to:
 - **Skip:** files that are already HEVC/AV1, 720p or smaller, at a modest bitrate.
 - **Fallback:** use `libx265` when NVENC isn't available.
 
+### Modes
+
+`--mode` chooses the prompt and rules. You can also set `VIDEO_MODE` in `.env`; the CLI flag wins.
+
+| Mode | Goal | Resolution | Size control |
+|---|---|---|---|
+| `compress` (default) | smaller files with good quality (rules above) | downscale to 720p, never upscale | bitrate capped at 70% of source; lean sources skipped |
+| `enhance` | best image quality at a reasonable size | always 720p: downscale **and upscale** | bitrate capped at 90% of source, clamped to 1500–4000 kb/s; nothing skipped |
+
+In `enhance` mode the LLM is told to:
+
+- **Clean up:** deinterlace (`bwdif`) when needed, lightly denoise (`hqdn3d`) older codecs and upscaled sources, scale with `lanczos`, and sharpen gently (`unsharp`) after scaling.
+- **Encode:** decode on the GPU (`-hwaccel cuda`), run the filters on the CPU, and encode 10-bit `hevc_nvenc` (`main10`, `-cq` 20–22, lookahead, B-frame refs). The `libx265` fallback is 10-bit, CRF 19–21.
+
+```powershell
+uv run video-compression --mode enhance
+```
+
+Example `enhance` command for a 1080p H.264 source:
+
+```powershell
+ffmpeg -hide_banner -n -hwaccel cuda -i 'C:\...\input\clip.mp4' -vf 'hqdn3d=1.5:1.5:6:6,scale=-2:720:flags=lanczos,unsharp=5:5:0.4:3:3:0' -c:v hevc_nvenc -preset p7 -tune hq -rc vbr -cq 21 -b:v 0 -spatial-aq 1 -temporal-aq 1 -rc-lookahead 32 -bf 4 -b_ref_mode middle -pix_fmt p010le -profile:v main10 -c:a copy -maxrate 4000k -bufsize 8000k 'C:\...\output\clip.mp4'
+```
+
+The upscaled output can be larger than a small, low-bitrate source, because the bitrate floor (1500 kb/s) is higher than the source bitrate.
+
 ### Safety
 
 - **No paths sent to the model:** it never sees or writes real file paths. It returns `{input}` / `{output}` placeholders, which are replaced locally.
@@ -54,6 +80,7 @@ Copy-Item .env.example .env   # then put your real key in .env
 OLLAMA_API_KEY=your-ollama-api-key
 OLLAMA_MODEL=gpt-oss:120b                 # optional
 FFMPEG_ENCODERS=libx265,hevc_nvenc        # optional: encoders the LLM may use
+VIDEO_MODE=compress                       # optional: compress | enhance
 ```
 
 `.env` is git-ignored. Never commit your key.
@@ -88,10 +115,12 @@ ffmpeg -hide_banner -n -hwaccel cuda -hwaccel_output_format cuda -i 'C:\...\inpu
 |---|---|---|
 | Ollama API key | `OLLAMA_API_KEY` in `.env` | required |
 | Model | `OLLAMA_MODEL` in `.env` | `gpt-oss:120b` |
+| Mode | `--mode` flag or `VIDEO_MODE` in `.env` | `compress` |
 | Allowed encoders | `FFMPEG_ENCODERS` in `.env` (only those in your ffmpeg build are kept) | `libx265,hevc_nvenc` |
 | Input / output / script paths | `main.py` | `input/`, `output/`, `scripts/encode.ps1` |
 | Parallel LLM calls | `max_concurrency` in `main.py` | `2` |
-| Encoding rules (resolution, quality, audio, skip) | `SYSTEM_PROMPT` in `prompts.py` | see above |
+| Encoding rules (resolution, quality, audio, skip) | `SYSTEM_PROMPT` / `ENHANCE_SYSTEM_PROMPT` in `prompts.py` | see above |
+| Enhance bitrate cap | `MAXRATE_RATIO_ENHANCE`, `ENHANCE_MIN_KBPS`, `ENHANCE_MAX_KBPS` in `tools.py` | `0.90`, `1500`, `4000` |
 
 To list the models your key can use:
 
@@ -107,7 +136,7 @@ src/video_compression/
   graph.py    LangGraph: list files → parallel probe_and_plan → write_script
   state.py    OverallState, per-file VideoState, FileResult
   llm.py      ChatOllama client for Ollama Cloud with structured output
-  prompts.py  system prompt with the encoding rules
+  prompts.py  system prompts (compress / enhance) with the encoding rules
   schemas.py  FfmpegPlan (Pydantic) returned by the LLM
   tools.py    run_command, ffprobe summary, encoder detection, command validation
   script.py   renders scripts/encode.ps1

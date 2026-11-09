@@ -31,6 +31,7 @@ def fan_out_files(state: OverallState) -> list[Send]:
                 "file": os.path.join(state["input_dir"], file),
                 "output_dir": state["output_dir"],
                 "encoders": state["encoders"],
+                "mode": state["mode"],
             },
         )
         for file in state["files_to_encode"]
@@ -51,14 +52,14 @@ def probe_and_plan(state: VideoState) -> dict:
     result["probe"] = probe
 
     # Decide in code, not in the LLM, whether re-encoding can actually help.
-    source = assess_source(probe)
+    source = assess_source(probe, state["mode"])
     if source.skip_reason:
         result["skipped"] = True
         result["reasoning"] = source.skip_reason
         return {"results": [result]}
 
     planner = get_planner()
-    messages = build_messages(probe, state["encoders"], source.max_video_kbps)
+    messages = build_messages(probe, state["encoders"], source.max_video_kbps, state["mode"])
     for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
         print(f"Planning {file} (attempt {attempt})")
         try:
